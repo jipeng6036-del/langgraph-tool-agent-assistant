@@ -1,0 +1,105 @@
+import streamlit as st
+
+from agent import run_agent, confirm_write_file, load_state
+
+
+st.set_page_config(
+    page_title="Tool Agent Assistant",
+    page_icon="🛠️",
+    layout="wide"
+)
+
+st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手")
+
+st.write(
+    "这是一个用于学习 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和评测的实验项目。"
+)
+
+st.sidebar.title("📌 项目目标")
+st.sidebar.markdown(
+    """
+    本项目用于学习工具调用型 Agent 的核心工程能力：
+
+    - Agent Loop
+    - Tool Calling
+    - 工具失败处理
+    - 写入前用户确认
+    - 状态保存
+    - 后续评测
+    """
+)
+
+st.sidebar.title("🧩 当前工具")
+st.sidebar.markdown(
+    """
+    - list_files：查看 workspace 文件
+    - read_file：读取 txt / md 文件
+    - write_file：写入 txt / md 文件，需要用户确认
+    """
+)
+
+st.sidebar.title("📂 工作目录")
+st.sidebar.code("workspace/")
+
+st.subheader("💬 输入任务")
+
+user_input = st.text_area(
+    "请输入你希望 Agent 完成的任务：",
+    placeholder="例如：查看 workspace 里有哪些文件；读取 notes.md；生成一份 summary.md",
+    height=120
+)
+
+if st.button("运行 Agent"):
+    if user_input.strip():
+        with st.spinner("Agent 正在规划并调用工具..."):
+            result = run_agent(user_input)
+
+        st.subheader("🤖 Agent 回答")
+        st.write(result["final_answer"])
+
+        st.subheader("🧭 Agent 状态")
+        st.json({
+    "tool_action": result["tool_action"],
+    "tool_file_name": result["tool_file_name"],
+    "target_file_name": result["target_file_name"],
+    "need_confirmation": result["need_confirmation"],
+    "pending_file_name": result["pending_file_name"],
+    "tool_result": result["tool_result"]
+})
+
+        if result["need_confirmation"]:
+            st.warning("检测到写文件操作，需要你确认后才会真正写入文件。")
+            st.session_state["pending_file_name"] = result["pending_file_name"]
+            st.session_state["pending_content"] = result["pending_content"]
+    else:
+        st.warning("请输入任务内容。")
+
+if "pending_file_name" in st.session_state:
+    st.subheader("✅ 待确认写入操作")
+
+    st.write(f"文件名：{st.session_state['pending_file_name']}")
+    st.text_area(
+        "待写入内容预览：",
+        st.session_state["pending_content"],
+        height=200
+    )
+
+    if st.button("确认写入文件"):
+        write_result = confirm_write_file(
+            st.session_state["pending_file_name"],
+            st.session_state["pending_content"]
+        )
+
+        st.success(write_result)
+
+        del st.session_state["pending_file_name"]
+        del st.session_state["pending_content"]
+
+st.subheader("💾 最近一次状态保存")
+
+saved_state = load_state()
+
+if saved_state:
+    st.json(saved_state)
+else:
+    st.info("暂无状态记录。")

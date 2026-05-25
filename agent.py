@@ -1,0 +1,406 @@
+import json
+import os
+from datetime import datetime
+from typing import Optional, TypedDict
+
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, StateGraph
+
+from tools import list_files_tool, read_file_tool, write_file_tool
+
+
+load_dotenv()
+
+API_KEY = os.getenv("OPENAI_API_KEY")
+BASE_URL = os.getenv("OPENAI_BASE_URL")
+MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")
+
+MEMORY_DIR = "memory"
+os.makedirs(MEMORY_DIR, exist_ok=True)
+
+MEMORY_FILE = os.path.join(MEMORY_DIR, "session_state.json")
+
+
+class AgentState(TypedDict):
+    user_input: str
+
+    # Agent 规划出的动作
+    tool_action: str
+    tool_file_name: str
+    target_file_name: str
+    tool_content: str
+
+    # 工具执行结果
+    tool_result: str
+
+    # 最终回答
+    final_answer: str
+
+    # 写文件确认机制
+    need_confirmation: bool
+    pending_file_name: str
+    pending_content: str
+
+
+def save_state(state: AgentState) -> None:
+    """
+    保存当前 Agent 状态，方便观察 Agent Loop 的执行过程。
+    """
+    data = {
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "state": state
+    }
+
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_state() -> Optional[dict]:
+    """
+    读取上一次保存的 Agent 状态。
+    """
+    if not os.path.exists(MEMORY_FILE):
+        return None
+
+    with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def get_llm():
+    """
+    获取大模型客户端。
+    """
+    if not API_KEY:
+        raise ValueError("未检测到 OPENAI_API_KEY，请先在 .env 文件中配置。")
+
+    return ChatOpenAI(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        model=MODEL_NAME,
+        temperature=0
+    )
+
+
+def parse_json_from_llm(text: str) -> dict:
+    """
+    尽量从模型输出中解析 JSON。
+    避免模型偶尔包上 ```json 代码块导致 json.loads 失败。
+    """
+    text = text.strip()
+
+    if text.startswith("```json"):
+        text = text.replace("```json", "", 1).strip()
+
+    if text.startswith("```"):
+        text = text.replace("```", "", 1).strip()
+
+    if text.endswith("```"):
+        text = text[:-3].strip()
+
+    try:
+        return json.loads(text)
+    except Exception:
+        return {}
+
+
+def planning_node(state: AgentState) -> AgentState:
+    """
+    Agent Loop 规划节点：
+    根据用户输入判断应该调用哪类工具。
+
+    1. list_files：查看 workspace 文件
+    2. read_file：读取文件
+    3. write_file：直接写入文件，但需要用户确认
+    4. read_then_write：先读源文件，再生成目标文件内容，最后等待用户确认写入
+    5. chat：不调用工具，直接回答
+    """
+    user_input = state["user_input"]
+
+    prompt = f"""
+你是一个工具调用型 Agent 助手。
+
+你可以使用以下工具动作：
+
+1. list_files
+用于查看 workspace 目录有哪些文件。
+
+2. read_file
+用于读取 workspace 目录下的 txt / md 文件。
+
+3. write_file
+用于直接写入 txt / md 文件。写入前必须用户确认。
+
+4. read_then_write
+用于“根据某个已有文件生成另一个新文件”的复合任务。
+例如：
+- 根据 notes.md 生成 summary.md
+- 读取 report.md 并生成 summary.md
+- 根据 meeting.md 的内容写一份 result.md
+
+5. chat
+不需要工具，直接回答用户。
+
+请根据用户输入判断应该使用哪个工具动作。
+
+用户输入：
+{user_input}
+
+请只返回 JSON，不要输出多余解释。
+
+JSON 格式如下：
+{{
+  "tool_action": "list_files / read_file / write_file / read_then_write / chat",
+  "tool_file_name": "源文件名，如果没有则为空字符串",
+  "target_file_name": "目标文件名，如果没有则为空字符串",
+  "tool_content": "需要直接写入的内容，如果没有则为空字符串"
+}}
+
+判断规则：
+- 如果用户想查看有哪些文件，使用 list_files。
+- 如果用户只想读取某个文件，使用 read_file。
+- 如果用户想把一段明确内容保存到某个文件，使用 write_file。
+- 如果用户想根据 A 文件生成 B 文件，必须使用 read_then_write。
+- 如果只是普通聊天或普通问题，使用 chat。
+- 文件名通常以 .txt 或 .md 结尾。
+"""
+
+    llm = get_llm()
+    response = llm.invoke(prompt)
+
+    plan = parse_json_from_llm(response.content)
+
+    tool_action = plan.get("tool_action", "chat")
+    tool_file_name = plan.get("tool_file_name", "")
+    target_file_name = plan.get("target_file_name", "")
+    tool_content = plan.get("tool_content", "")
+
+    allowed_actions = {
+        "list_files",
+        "read_file",
+        "write_file",
+        "read_then_write",
+        "chat"
+    }
+
+    if tool_action not in allowed_actions:
+        tool_action = "chat"
+
+    state["tool_action"] = tool_action
+    state["tool_file_name"] = tool_file_name
+    state["target_file_name"] = target_file_name
+    state["tool_content"] = tool_content
+
+    return state
+
+
+def generate_content_from_file(source_file_name: str, source_content: str, target_file_name: str) -> str:
+    """
+    根据源文件内容生成目标文件内容。
+    例如：根据 notes.md 生成 summary.md。
+    """
+    prompt = f"""
+你是一个严谨的文档整理助手。
+
+现在需要根据源文件内容生成一个新的 Markdown 文档。
+
+源文件名：
+{source_file_name}
+
+目标文件名：
+{target_file_name}
+
+源文件内容：
+{source_content}
+
+请根据源文件内容生成目标文件的 Markdown 内容。
+
+要求：
+1. 不要编造源文件中没有的信息。
+2. 内容要结构清晰。
+3. 如果是 summary.md，请生成一份简洁总结。
+4. 使用中文。
+5. 只输出目标文件内容，不要解释。
+"""
+
+    llm = get_llm()
+    response = llm.invoke(prompt)
+
+    return response.content
+
+
+def tool_node(state: AgentState) -> AgentState:
+    """
+    工具执行节点：
+    根据 planning_node 的规划结果执行工具。
+    """
+    action = state["tool_action"]
+    file_name = state["tool_file_name"]
+    target_file_name = state["target_file_name"]
+    content = state["tool_content"]
+
+    # 默认不需要确认
+    state["need_confirmation"] = False
+    state["pending_file_name"] = ""
+    state["pending_content"] = ""
+
+    if action == "list_files":
+        state["tool_result"] = list_files_tool()
+
+    elif action == "read_file":
+        state["tool_result"] = read_file_tool(file_name)
+
+    elif action == "write_file":
+        if not target_file_name:
+            target_file_name = file_name
+
+        state["need_confirmation"] = True
+        state["pending_file_name"] = target_file_name
+        state["pending_content"] = content
+        state["tool_result"] = (
+            f"检测到写文件操作，需要用户确认后才能写入：{target_file_name}"
+        )
+
+    elif action == "read_then_write":
+        if not file_name:
+            state["tool_result"] = "缺少源文件名，无法读取文件。"
+            return state
+
+        if not target_file_name:
+            target_file_name = "summary.md"
+
+        source_content = read_file_tool(file_name)
+
+        if source_content.startswith("文件不存在") or source_content.startswith("暂时只支持"):
+            state["tool_result"] = source_content
+            return state
+
+        generated_content = generate_content_from_file(
+            source_file_name=file_name,
+            source_content=source_content,
+            target_file_name=target_file_name
+        )
+
+        state["need_confirmation"] = True
+        state["pending_file_name"] = target_file_name
+        state["pending_content"] = generated_content
+        state["tool_result"] = (
+            f"已读取源文件：{file_name}\n"
+            f"已生成目标文件内容：{target_file_name}\n"
+            f"当前尚未真正写入文件，等待用户确认。"
+        )
+
+    else:
+        state["tool_result"] = "未调用工具。"
+
+    return state
+
+
+def answer_node(state: AgentState) -> AgentState:
+    """
+    最终回答节点：
+    根据工具执行结果生成用户可读回答。
+    如果涉及写文件，必须明确说明还没有写入，需要用户确认。
+    """
+    user_input = state["user_input"]
+    tool_result = state["tool_result"]
+    need_confirmation = state["need_confirmation"]
+    pending_file_name = state["pending_file_name"]
+
+    if need_confirmation:
+        state["final_answer"] = (
+            f"我已经根据你的任务完成了准备工作。\n\n"
+            f"{tool_result}\n\n"
+            f"待写入文件：{pending_file_name}\n\n"
+            f"注意：文件目前还没有真正写入。请在页面下方查看内容预览，确认无误后点击“确认写入文件”。"
+        )
+        save_state(state)
+        return state
+
+    prompt = f"""
+你是一个本地工具调用型 Agent 助手。
+
+用户输入：
+{user_input}
+
+工具执行结果：
+{tool_result}
+
+请用中文给用户一个简洁、清晰的回答。
+如果工具返回的是文件内容，请可以适当总结。
+如果工具提示文件不存在，请明确告诉用户。
+"""
+
+    llm = get_llm()
+    response = llm.invoke(prompt)
+
+    state["final_answer"] = response.content
+    save_state(state)
+
+    return state
+
+
+def build_agent_graph():
+    """
+    构建 LangGraph 单 Agent 工作流。
+    """
+    workflow = StateGraph(AgentState)
+
+    workflow.add_node("planning", planning_node)
+    workflow.add_node("tool", tool_node)
+    workflow.add_node("answer", answer_node)
+
+    workflow.set_entry_point("planning")
+    workflow.add_edge("planning", "tool")
+    workflow.add_edge("tool", "answer")
+    workflow.add_edge("answer", END)
+
+    return workflow.compile()
+
+
+agent_graph = build_agent_graph()
+
+
+def run_agent(user_input: str) -> AgentState:
+    """
+    运行 Agent。
+    """
+    initial_state: AgentState = {
+        "user_input": user_input,
+        "tool_action": "",
+        "tool_file_name": "",
+        "target_file_name": "",
+        "tool_content": "",
+        "tool_result": "",
+        "final_answer": "",
+        "need_confirmation": False,
+        "pending_file_name": "",
+        "pending_content": ""
+    }
+
+    result = agent_graph.invoke(initial_state)
+    return result
+
+
+def confirm_write_file(file_name: str, content: str) -> str:
+    """
+    用户确认后才真正写入文件，并更新状态保存。
+    """
+    result = write_file_tool(file_name, content)
+
+    completed_state: AgentState = {
+        "user_input": f"用户已确认写入文件：{file_name}",
+        "tool_action": "write_file_confirmed",
+        "tool_file_name": file_name,
+        "target_file_name": file_name,
+        "tool_content": content,
+        "tool_result": result,
+        "final_answer": f"文件已确认并写入：{file_name}",
+        "need_confirmation": False,
+        "pending_file_name": "",
+        "pending_content": ""
+    }
+
+    save_state(completed_state)
+
+    return result
