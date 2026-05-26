@@ -9,10 +9,11 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手")
+st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手 1.2")
 
 st.write(
     "这是一个用于学习 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和评测的实验项目。"
+    "当前 1.2 版本增强了文件不存在、非法路径、不支持格式等工具失败处理能力。"
 )
 
 st.sidebar.title("📌 项目目标")
@@ -58,19 +59,30 @@ if st.button("运行 Agent"):
         st.write(result["final_answer"])
 
         st.subheader("🧭 Agent 状态")
+
         st.json({
-    "tool_action": result["tool_action"],
-    "tool_file_name": result["tool_file_name"],
-    "target_file_name": result["target_file_name"],
-    "need_confirmation": result["need_confirmation"],
-    "pending_file_name": result["pending_file_name"],
-    "tool_result": result["tool_result"]
-})
+            "tool_action": result["tool_action"],
+            "tool_file_name": result["tool_file_name"],
+            "target_file_name": result["target_file_name"],
+            "need_confirmation": result["need_confirmation"],
+            "pending_file_name": result["pending_file_name"],
+            "error_type": result["error_type"],
+            "error_message": result["error_message"],
+            "recovery_suggestion": result["recovery_suggestion"],
+            "tool_result": result["tool_result"]
+        })
+
+        if result["error_type"] != "none":
+            st.error("工具执行失败")
+            st.write("**错误原因：**")
+            st.write(result["error_message"])
+            st.info(f"恢复建议：{result['recovery_suggestion']}")
 
         if result["need_confirmation"]:
             st.warning("检测到写文件操作，需要你确认后才会真正写入文件。")
             st.session_state["pending_file_name"] = result["pending_file_name"]
             st.session_state["pending_content"] = result["pending_content"]
+
     else:
         st.warning("请输入任务内容。")
 

@@ -34,6 +34,11 @@ class AgentState(TypedDict):
     # 工具执行结果
     tool_result: str
 
+    # 错误处理状态
+    error_type: str
+    error_message: str
+    recovery_suggestion: str
+
     # 最终回答
     final_answer: str
 
@@ -104,16 +109,63 @@ def parse_json_from_llm(text: str) -> dict:
         return {}
 
 
+def detect_tool_error(tool_result: str) -> tuple[str, str, str]:
+    """
+    根据工具执行结果识别错误类型、错误原因和恢复建议。
+    """
+    if "文件不存在" in tool_result:
+        return (
+            "file_not_found",
+            tool_result,
+            "请检查文件名是否正确，或先使用“查看 workspace 里有哪些文件”。"
+        )
+
+    if "非法文件路径" in tool_result:
+        return (
+            "invalid_path",
+            tool_result,
+            "出于安全限制，Agent 只能访问 workspace 目录内的文件，请使用 workspace 内的相对文件名。"
+        )
+
+    if "暂时只支持" in tool_result:
+        return (
+            "unsupported_format",
+            tool_result,
+            "请使用 .txt 或 .md 文件进行测试。"
+        )
+
+    if "文件名不能为空" in tool_result:
+        return (
+            "empty_file_name",
+            tool_result,
+            "请输入明确的文件名，例如 notes.md 或 summary.md。"
+        )
+
+    return ("none", "", "")
+
+
+def apply_error_state(state: AgentState, tool_result: str) -> AgentState:
+    """
+    将工具错误识别结果写入 AgentState。
+    """
+    error_type, error_message, recovery_suggestion = detect_tool_error(tool_result)
+
+    state["error_type"] = error_type
+    state["error_message"] = error_message
+    state["recovery_suggestion"] = recovery_suggestion
+
+    if error_type != "none":
+        state["need_confirmation"] = False
+        state["pending_file_name"] = ""
+        state["pending_content"] = ""
+
+    return state
+
+
 def planning_node(state: AgentState) -> AgentState:
     """
     Agent Loop 规划节点：
     根据用户输入判断应该调用哪类工具。
-
-    1. list_files：查看 workspace 文件
-    2. read_file：读取文件
-    3. write_file：直接写入文件，但需要用户确认
-    4. read_then_write：先读源文件，再生成目标文件内容，最后等待用户确认写入
-    5. chat：不调用工具，直接回答
     """
     user_input = state["user_input"]
 
@@ -239,20 +291,31 @@ def tool_node(state: AgentState) -> AgentState:
     target_file_name = state["target_file_name"]
     content = state["tool_content"]
 
-    # 默认不需要确认
+    # 默认状态
     state["need_confirmation"] = False
     state["pending_file_name"] = ""
     state["pending_content"] = ""
+    state["error_type"] = "none"
+    state["error_message"] = ""
+    state["recovery_suggestion"] = ""
 
     if action == "list_files":
         state["tool_result"] = list_files_tool()
+        state = apply_error_state(state, state["tool_result"])
 
     elif action == "read_file":
         state["tool_result"] = read_file_tool(file_name)
+        state = apply_error_state(state, state["tool_result"])
 
     elif action == "write_file":
         if not target_file_name:
             target_file_name = file_name
+
+        # write_file 本身是高风险操作，先不真正写入
+        if not target_file_name:
+            state["tool_result"] = "文件名不能为空。"
+            state = apply_error_state(state, state["tool_result"])
+            return state
 
         state["need_confirmation"] = True
         state["pending_file_name"] = target_file_name
@@ -263,7 +326,8 @@ def tool_node(state: AgentState) -> AgentState:
 
     elif action == "read_then_write":
         if not file_name:
-            state["tool_result"] = "缺少源文件名，无法读取文件。"
+            state["tool_result"] = "文件名不能为空。"
+            state = apply_error_state(state, state["tool_result"])
             return state
 
         if not target_file_name:
@@ -271,8 +335,16 @@ def tool_node(state: AgentState) -> AgentState:
 
         source_content = read_file_tool(file_name)
 
-        if source_content.startswith("文件不存在") or source_content.startswith("暂时只支持"):
+        error_type, error_message, recovery_suggestion = detect_tool_error(source_content)
+
+        if error_type != "none":
             state["tool_result"] = source_content
+            state["error_type"] = error_type
+            state["error_message"] = error_message
+            state["recovery_suggestion"] = recovery_suggestion
+            state["need_confirmation"] = False
+            state["pending_file_name"] = ""
+            state["pending_content"] = ""
             return state
 
         generated_content = generate_content_from_file(
@@ -292,6 +364,7 @@ def tool_node(state: AgentState) -> AgentState:
 
     else:
         state["tool_result"] = "未调用工具。"
+        state = apply_error_state(state, state["tool_result"])
 
     return state
 
@@ -300,12 +373,24 @@ def answer_node(state: AgentState) -> AgentState:
     """
     最终回答节点：
     根据工具执行结果生成用户可读回答。
-    如果涉及写文件，必须明确说明还没有写入，需要用户确认。
     """
     user_input = state["user_input"]
     tool_result = state["tool_result"]
     need_confirmation = state["need_confirmation"]
     pending_file_name = state["pending_file_name"]
+    error_type = state["error_type"]
+    error_message = state["error_message"]
+    recovery_suggestion = state["recovery_suggestion"]
+
+    if error_type != "none":
+        state["final_answer"] = (
+            "工具执行失败。\n\n"
+            f"错误类型：{error_type}\n\n"
+            f"错误原因：\n{error_message}\n\n"
+            f"恢复建议：\n{recovery_suggestion}"
+        )
+        save_state(state)
+        return state
 
     if need_confirmation:
         state["final_answer"] = (
@@ -372,6 +457,9 @@ def run_agent(user_input: str) -> AgentState:
         "target_file_name": "",
         "tool_content": "",
         "tool_result": "",
+        "error_type": "none",
+        "error_message": "",
+        "recovery_suggestion": "",
         "final_answer": "",
         "need_confirmation": False,
         "pending_file_name": "",
@@ -388,6 +476,8 @@ def confirm_write_file(file_name: str, content: str) -> str:
     """
     result = write_file_tool(file_name, content)
 
+    error_type, error_message, recovery_suggestion = detect_tool_error(result)
+
     completed_state: AgentState = {
         "user_input": f"用户已确认写入文件：{file_name}",
         "tool_action": "write_file_confirmed",
@@ -395,7 +485,10 @@ def confirm_write_file(file_name: str, content: str) -> str:
         "target_file_name": file_name,
         "tool_content": content,
         "tool_result": result,
-        "final_answer": f"文件已确认并写入：{file_name}",
+        "error_type": error_type,
+        "error_message": error_message,
+        "recovery_suggestion": recovery_suggestion,
+        "final_answer": f"文件已确认并写入：{file_name}" if error_type == "none" else "文件写入失败。",
         "need_confirmation": False,
         "pending_file_name": "",
         "pending_content": ""

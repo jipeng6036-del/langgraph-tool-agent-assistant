@@ -2,7 +2,7 @@
 
 一个基于 LangGraph 的工具调用型 Agent 助手项目，用于学习和实践 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和后续评测等核心工程能力。
 
-本项目不以 RAG 检索为核心，而是重点关注 Agent 如何根据用户任务选择工具、执行工具、处理文件读写，并在涉及写入操作时进行用户确认。
+本项目不以 RAG 检索为核心，而是重点关注 Agent 如何根据用户任务选择工具、执行工具、处理文件读写，并在涉及写入操作时进行用户确认；在 1.2 版本中，进一步增强了工具失败处理能力，支持文件不存在、非法路径、不支持格式等错误识别，并给出恢复建议。
 
 ---
 
@@ -20,6 +20,10 @@ Tool Agent Assistant 是一个面向 Agent 工程学习的实验项目。
 - 写文件前要求用户确认
 - 用户确认后才真正写入文件
 - 保存最近一次 Agent 执行状态
+- 文件不存在时给出可用文件建议
+- 非法路径访问时进行安全拦截
+- 不支持格式时给出明确提示
+- 失败后展示错误原因和恢复建议
 
 ---
 
@@ -41,7 +45,7 @@ Tool Agent Assistant 是一个面向 Agent 工程学习的实验项目。
 当前项目版本：
 
 ```text
-Tool Agent 1.1
+Tool Agent 1.2
 ```
 
 版本能力：
@@ -49,6 +53,7 @@ Tool Agent 1.1
 ```text
 Tool Agent 1.0：文件查看、文件读取、基础写入确认、状态保存
 Tool Agent 1.1：新增 read_then_write 复合流程，支持根据源文件生成目标文件，并在写入前等待用户确认
+Tool Agent 1.2：工具失败处理增强，支持文件不存在、非法路径、不支持格式等错误识别，并提供错误原因和恢复建议
 ```
 
 ---
@@ -156,6 +161,9 @@ tool_action
 tool_file_name
 target_file_name
 tool_result
+error_type
+error_message
+recovery_suggestion
 final_answer
 need_confirmation
 pending_file_name
@@ -163,6 +171,59 @@ pending_content
 ```
 
 这样可以观察 Agent Loop 的执行过程，也方便后续做会话恢复和评测分析。
+
+---
+
+### 6. 工具失败处理增强
+
+Tool Agent 1.2 增强了工具失败处理能力。
+
+当用户输入不存在的文件时，例如：
+
+```text
+读取 not_exist.md
+```
+
+系统会返回：
+
+```text
+文件不存在：not_exist.md
+
+当前 workspace 中可用文件：
+- notes.md
+- summary.md
+
+请检查文件名是否输入正确。
+```
+
+当用户尝试访问 workspace 外部路径时，例如：
+
+```text
+读取 ../README.md
+```
+
+系统会拒绝访问，并提示：
+
+```text
+非法文件路径：只能访问 workspace 目录内的文件。
+```
+
+当用户读取或写入不支持的文件格式时，系统会提示当前仅支持：
+
+```text
+.txt
+.md
+```
+
+同时，Agent 状态中会记录：
+
+```text
+error_type
+error_message
+recovery_suggestion
+```
+
+用于展示错误类型、错误原因和恢复建议。
 
 ---
 
@@ -189,6 +250,10 @@ planning_node 解析任务意图
 判断工具动作
 ↓
 tool_node 执行工具
+↓
+识别工具执行是否失败
+↓
+如果失败，记录错误类型、错误原因和恢复建议
 ↓
 如需写入文件，则进入用户确认流程
 ↓
@@ -231,7 +296,7 @@ chat
 
 ### tool_node
 
-负责执行工具调用。
+负责执行工具调用，并识别工具失败情况。
 
 例如：
 
@@ -240,9 +305,27 @@ chat
 - `write_file`：进入待确认写入流程
 - `read_then_write`：先读源文件，再生成目标文件内容，并等待用户确认
 
+在 Tool Agent 1.2 中，`tool_node` 还会识别：
+
+```text
+file_not_found
+invalid_path
+unsupported_format
+empty_file_name
+```
+
 ### answer_node
 
 负责根据工具结果生成用户可读回答，并保存当前 Agent 状态。
+
+如果工具执行失败，`answer_node` 会输出：
+
+```text
+工具执行失败
+错误类型
+错误原因
+恢复建议
+```
 
 ---
 
@@ -277,6 +360,14 @@ tools.py
 只支持 .txt 和 .md 文件
 ```
 
+失败处理：
+
+```text
+文件不存在时展示 workspace 中可用文件
+非法路径时拒绝访问
+不支持格式时提示仅支持 .txt 和 .md
+```
+
 ### write_file_tool
 
 功能：
@@ -293,6 +384,41 @@ tools.py
 写入前必须经过用户确认
 ```
 
+失败处理：
+
+```text
+非法路径时拒绝写入
+不支持格式时提示仅支持 .txt 和 .md
+```
+
+### get_available_files
+
+功能：
+
+```text
+返回 workspace 目录下的所有可用文件名
+```
+
+主要用于文件不存在时给用户提供可选文件建议。
+
+### format_available_files_suggestion
+
+功能：
+
+```text
+格式化 workspace 可用文件列表
+```
+
+示例：
+
+```text
+当前 workspace 中可用文件：
+- notes.md
+- summary.md
+
+请检查文件名是否输入正确。
+```
+
 ---
 
 ## 九、安全设计
@@ -305,6 +431,24 @@ tools.py
 
 如果用户尝试访问上级目录或系统路径，系统会拒绝操作。
 
+例如：
+
+```text
+读取 ../README.md
+```
+
+会被识别为：
+
+```text
+invalid_path
+```
+
+并返回：
+
+```text
+非法文件路径：只能访问 workspace 目录内的文件。
+```
+
 这体现了 Agent 工具调用中的一个重要原则：
 
 ```text
@@ -313,7 +457,53 @@ tools.py
 
 ---
 
-## 十、项目结构
+## 十、错误类型设计
+
+Tool Agent 1.2 新增了错误状态字段：
+
+```text
+error_type
+error_message
+recovery_suggestion
+```
+
+### error_type
+
+用于表示错误类型。
+
+当前支持：
+
+```text
+none
+file_not_found
+invalid_path
+unsupported_format
+empty_file_name
+```
+
+### error_message
+
+用于记录具体错误原因。
+
+示例：
+
+```text
+文件不存在：not_exist.md
+```
+
+### recovery_suggestion
+
+用于给用户提供下一步建议。
+
+示例：
+
+```text
+请检查文件名是否正确，或先使用“查看 workspace 里有哪些文件”。
+```
+
+---
+
+## 十一、项目结构
 
 ```text
 tool_agent_assistant
@@ -333,7 +523,7 @@ tool_agent_assistant
 
 ---
 
-## 十一、环境变量配置
+## 十二、环境变量配置
 
 项目根目录新建 `.env` 文件：
 
@@ -352,7 +542,7 @@ MODEL_NAME=deepseek-chat
 
 ---
 
-## 十二、运行方式
+## 十三、运行方式
 
 ### 1. 创建虚拟环境
 
@@ -395,7 +585,7 @@ http://localhost:8502
 
 ---
 
-## 十三、测试示例
+## 十四、测试示例
 
 ### 测试 1：查看文件
 
@@ -409,6 +599,7 @@ http://localhost:8502
 
 ```text
 Agent 调用 list_files_tool，并返回 notes.md、summary.md 等文件
+error_type = none
 ```
 
 ---
@@ -425,6 +616,7 @@ Agent 调用 list_files_tool，并返回 notes.md、summary.md 等文件
 
 ```text
 Agent 调用 read_file_tool，读取 notes.md 内容并回答
+error_type = none
 ```
 
 ---
@@ -444,6 +636,9 @@ Agent 调用 read_then_write
 读取 notes.md
 生成 summary.md 内容
 进入待确认写入状态
+need_confirmation = true
+pending_file_name = summary.md
+error_type = none
 ```
 
 点击：
@@ -462,7 +657,66 @@ need_confirmation 为 false
 
 ---
 
-## 十四、当前已实现能力
+### 测试 4：读取不存在的文件
+
+输入：
+
+```text
+读取 not_exist.md
+```
+
+预期：
+
+```text
+error_type = file_not_found
+need_confirmation = false
+pending_file_name = ""
+页面显示错误原因和恢复建议
+展示 workspace 中可用文件
+```
+
+---
+
+### 测试 5：读取非法路径
+
+输入：
+
+```text
+读取 ../README.md
+```
+
+预期：
+
+```text
+error_type = invalid_path
+need_confirmation = false
+页面提示只能访问 workspace 目录内文件
+```
+
+---
+
+### 测试 6：根据不存在文件生成新文件
+
+输入：
+
+```text
+请根据 not_exist.md 的内容生成 summary.md
+```
+
+预期：
+
+```text
+tool_action = read_then_write
+error_type = file_not_found
+need_confirmation = false
+pending_file_name = ""
+pending_content = ""
+不会出现确认写入按钮
+```
+
+---
+
+## 十五、当前已实现能力
 
 ```text
 ✅ Agent Loop
@@ -475,20 +729,29 @@ need_confirmation 为 false
 ✅ 状态保存
 ✅ 确认写入后的状态更新
 ✅ workspace 文件操作安全边界
+✅ 文件不存在错误识别
+✅ 文件不存在时展示可用文件建议
+✅ 非法路径访问拦截
+✅ 不支持格式提示
+✅ 错误原因记录
+✅ 恢复建议展示
+✅ read_then_write 源文件失败时自动停止流程
 ```
 
 ---
 
-## 十五、后续优化方向
+## 十六、后续优化方向
 
-### Tool Agent 1.2：工具失败处理增强
+### Tool Agent 1.2：工具失败处理增强【已完成】
 
-计划增加：
+已实现：
 
 ```text
-文件不存在时给出可选文件建议
-不支持格式时给出明确提示
-工具执行失败时记录失败原因
+文件不存在时给出可用文件建议
+非法路径访问时明确拒绝
+不支持格式时提示支持 .txt / .md
+记录 error_type、error_message、recovery_suggestion
+失败后给出恢复建议
 ```
 
 ### Tool Agent 1.3：状态恢复
@@ -499,6 +762,7 @@ need_confirmation 为 false
 读取上一次 pending 状态
 页面支持继续上一次未完成任务
 支持清空状态
+支持查看历史执行记录
 ```
 
 ### Tool Agent 1.4：评测集
@@ -508,6 +772,7 @@ need_confirmation 为 false
 ```text
 eval_cases.md
 记录测试问题、预期工具、实际工具、是否通过
+覆盖正常任务、失败任务、边界任务和用户确认任务
 ```
 
 ### Tool Agent 2.0：多 Agent 协作
@@ -522,7 +787,7 @@ Reviewer Agent
 
 ---
 
-## 十六、项目定位
+## 十七、项目定位
 
 本项目不是普通聊天机器人，而是一个用于学习 Agent 工程机制的工具调用型 Agent 项目。
 
@@ -545,8 +810,8 @@ Reviewer Agent
 
 ---
 
-## 十七、简历描述参考
+## 十八、简历描述参考
 
 ```text
-基于 LangGraph 构建工具调用型 Agent 助手，实现 Agent Loop、Tool Calling、文件读取与写入、写入前用户确认和状态保存机制。系统支持根据用户自然语言任务自动选择 list_files、read_file、write_file、read_then_write 等工具，并将最近一次执行状态保存为 JSON，用于观察 Agent 执行过程和后续评测优化。
+基于 LangGraph 构建工具调用型 Agent 助手，实现 Agent Loop、Tool Calling、文件读取与写入、写入前用户确认、状态保存和工具失败处理机制。系统支持根据用户自然语言任务自动选择 list_files、read_file、write_file、read_then_write 等工具，并对文件不存在、非法路径、不支持格式等异常情况进行错误识别、原因记录和恢复建议展示。
 ```
