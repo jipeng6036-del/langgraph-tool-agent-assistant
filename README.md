@@ -2,7 +2,7 @@
 
 一个基于 LangGraph 的工具调用型 Agent 助手项目，用于学习和实践 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和后续评测等核心工程能力。
 
-本项目不以 RAG 检索为核心，而是重点关注 Agent 如何根据用户任务选择工具、执行工具、处理文件读写，并在涉及写入操作时进行用户确认；在 1.3 版本中，进一步增加了状态恢复与任务继续能力，支持页面刷新后恢复上一次未完成的写入确认任务。
+本项目不以 RAG 检索为核心，而是重点关注 Agent 如何根据用户任务选择工具、执行工具、处理文件读写，并在涉及写入操作时进行用户确认；在 1.4 版本中，进一步新增了手动评测集与测试记录，用于验证 Agent 在正常任务、写入确认、失败处理、状态恢复和边界测试下的表现。
 
 ---
 
@@ -40,12 +40,13 @@ Tool Agent Assistant 是一个面向 Agent 工程学习的实验项目。
 
 ---
 
+
 ## 三、当前版本
 
 当前项目版本：
 
 ```text
-Tool Agent 1.3
+Tool Agent 1.4
 ```
 
 版本能力：
@@ -54,7 +55,8 @@ Tool Agent 1.3
 Tool Agent 1.0：文件查看、文件读取、基础写入确认、状态保存
 Tool Agent 1.1：新增 read_then_write 复合流程，支持根据源文件生成目标文件，并在写入前等待用户确认
 Tool Agent 1.2：工具失败处理增强，支持文件不存在、非法路径、不支持格式等错误识别，并提供错误原因和恢复建议
-Tool Agent 1.3：状态恢复与任务继续，支持页面刷新后恢复上一次未完成的写入确认任务，并支持清空状态记录。
+Tool Agent 1.3：状态恢复与任务继续，支持页面刷新后恢复上一次未完成的写入确认任务，并支持清空状态记录
+Tool Agent 1.4：新增手动评测集 eval_cases.md，用于记录测试问题、预期工具动作、预期错误类型、预期确认状态和实际测试结果
 ```
 
 ---
@@ -250,6 +252,46 @@ recovery_suggestion
 ```
 
 用于展示错误类型、错误原因和恢复建议。
+---
+
+### 8. 手动评测集与测试记录
+
+Tool Agent 1.4 新增了手动评测集：
+
+```text
+eval_cases.md
+```
+
+该文件用于记录 Agent 在不同任务场景下的预期行为和实际测试结果。
+
+评测覆盖：
+
+```text
+正常任务
+写入确认
+失败处理
+状态恢复
+边界测试
+```
+
+每个测试用例记录：
+
+```text
+测试编号
+测试类型
+用户输入
+预期 tool_action
+预期 error_type
+预期 need_confirmation
+预期结果
+实际结果
+是否通过
+备注
+```
+
+通过该评测集，可以在后续修改 Agent 逻辑后，检查系统是否出现能力退化。
+
+
 
 ---
 
@@ -537,6 +579,7 @@ tool_agent_assistant
 ├── agent.py               # LangGraph Agent 工作流
 ├── tools.py               # 本地文件工具函数
 ├── README.md              # 项目说明
+├── eval_cases.md          # 手动评测集与测试记录
 ├── requirements.txt       # Python 依赖
 ├── .env.example           # 环境变量示例
 ├── .gitignore             # Git 忽略配置
@@ -742,7 +785,56 @@ pending_content = ""
 
 ---
 
-## 十五、当前已实现能力
+## 十五、评测集说明
+
+Tool Agent 1.4 新增：
+
+```text
+eval_cases.md
+```
+
+该文件用于手动评测 Agent 的关键能力。
+
+当前评测集包含 15 个测试用例，覆盖以下类型：
+
+```text
+正常任务
+写入确认
+失败处理
+状态恢复
+边界测试
+```
+
+示例测试项：
+
+```text
+Case 001：查看 workspace 文件
+Case 002：读取 notes.md
+Case 004：根据 notes.md 生成 summary.md
+Case 006：读取不存在文件 not_exist.md
+Case 007：读取非法路径 ../README.md
+Case 010：刷新页面后恢复未完成写入任务
+```
+
+评测字段包括：
+
+```text
+用户输入
+预期 tool_action
+预期 error_type
+预期 need_confirmation
+预期结果
+实际结果
+是否通过
+备注
+```
+
+通过该评测集，可以验证 Agent 在工具调用、失败处理、用户确认和状态恢复等关键流程下是否表现稳定。
+
+---
+
+## 十六、当前已实现能力
+
 
 ```text
 ✅ Agent Loop
@@ -766,11 +858,16 @@ pending_content = ""
 ✅ 错误原因记录
 ✅ 恢复建议展示
 ✅ read_then_write 源文件失败时自动停止流程
+✅ 手动评测集 eval_cases.md
+✅ 测试用例覆盖正常任务、写入确认、失败处理、状态恢复和边界测试
+✅ 支持记录预期 tool_action、error_type 和 need_confirmation
+✅ 支持记录实际结果、是否通过和备注
 ```
 
 ---
 
-## 十六、后续优化方向
+
+## 十七、后续优化方向
 
 ### Tool Agent 1.2：工具失败处理增强【已完成】
 
@@ -795,14 +892,26 @@ pending_content = ""
 支持清空状态记录
 ```
 
-### Tool Agent 1.4：评测集
+### Tool Agent 1.4：评测集与测试记录【已完成】
+
+已实现：
+
+```text
+新增 eval_cases.md 手动评测集
+记录测试问题、预期工具、预期错误类型、预期确认状态
+覆盖正常任务、失败任务、边界任务和用户确认任务
+支持记录实际结果、是否通过和备注
+```
+
+### Tool Agent 1.5：自动化评测脚本
 
 计划增加：
 
 ```text
-eval_cases.md
-记录测试问题、预期工具、实际工具、是否通过
-覆盖正常任务、失败任务、边界任务和用户确认任务
+读取 eval_cases.json 或 eval_cases.md
+自动运行测试输入
+自动记录实际 tool_action、error_type、need_confirmation
+生成评测结果报告
 ```
 
 ### Tool Agent 2.0：多 Agent 协作
@@ -814,10 +923,9 @@ Planner Agent
 Tool Executor Agent
 Reviewer Agent
 ```
-
 ---
 
-## 十七、项目定位
+## 十八、项目定位
 
 本项目不是普通聊天机器人，而是一个用于学习 Agent 工程机制的工具调用型 Agent 项目。
 
@@ -840,7 +948,7 @@ Reviewer Agent
 
 ---
 
-## 十八、简历描述参考
+## 十九、简历描述参考
 
 ```text
 基于 LangGraph 构建工具调用型 Agent 助手，实现 Agent Loop、Tool Calling、文件读取与写入、写入前用户确认、状态保存和工具失败处理机制。系统支持根据用户自然语言任务自动选择 list_files、read_file、write_file、read_then_write 等工具，并对文件不存在、非法路径、不支持格式等异常情况进行错误识别、原因记录和恢复建议展示。
