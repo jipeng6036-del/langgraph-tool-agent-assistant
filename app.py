@@ -15,11 +15,12 @@ st.set_page_config(
     layout="wide"
  )
 
-st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手 1.4")
+st.title("🛠️ 基于 LangGraph 的多 Agent 工具调用助手 2.0")
 
 st.write(
     "这是一个用于学习 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和评测的实验项目。"
-    "当前 1.4 版本新增了手动评测集 eval_cases.md，用于记录测试问题、预期工具动作、预期错误类型、预期确认状态和实际测试结果。"
+    "Tool Agent 2.0 引入 Planner Agent、Tool Executor Agent、Reviewer Agent 和 Final Answer Agent，"
+    "实现最小多 Agent 协作流程。"
  )
 
 
@@ -51,6 +52,16 @@ st.sidebar.markdown(
     - eval_cases.md：手动评测集
     - 覆盖正常任务、写入确认、失败处理、状态恢复和边界测试
     - 用于记录预期工具动作、错误类型、确认状态和实际测试结果
+    """
+)
+
+st.sidebar.title("🔄 多 Agent 工作流")
+st.sidebar.markdown(
+    """
+    - Planner Agent：任务规划
+    - Tool Executor Agent：工具执行
+    - Reviewer Agent：结果审查
+    - Final Answer Agent：最终回复
     """
 )
 
@@ -109,11 +120,14 @@ if st.button("运行 Agent"):
             "tool_action": result["tool_action"],
             "tool_file_name": result["tool_file_name"],
             "target_file_name": result["target_file_name"],
+            "plan_reason": result["plan_reason"],
             "need_confirmation": result["need_confirmation"],
             "pending_file_name": result["pending_file_name"],
             "error_type": result["error_type"],
             "error_message": result["error_message"],
             "recovery_suggestion": result["recovery_suggestion"],
+            "review_passed": result["review_passed"],
+            "review_result": result["review_result"],
             "tool_result": result["tool_result"]
         })
 

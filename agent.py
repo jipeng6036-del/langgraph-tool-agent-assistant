@@ -30,6 +30,7 @@ class AgentState(TypedDict):
     tool_file_name: str
     target_file_name: str
     tool_content: str
+    plan_reason: str
 
     # 工具执行结果
     tool_result: str
@@ -38,6 +39,10 @@ class AgentState(TypedDict):
     error_type: str
     error_message: str
     recovery_suggestion: str
+
+    # 审查结果
+    review_passed: bool
+    review_result: str
 
     # 最终回答
     final_answer: str
@@ -190,10 +195,10 @@ def apply_error_state(state: AgentState, tool_result: str) -> AgentState:
     return state
 
 
-def planning_node(state: AgentState) -> AgentState:
+def planner_agent_node(state: AgentState) -> AgentState:
     """
-    Agent Loop 规划节点：
-    根据用户输入判断应该调用哪类工具。
+    Planner Agent：
+    理解用户任务，判断应该调用哪类工具，并说明规划原因。
     """
     user_input = state["user_input"]
 
@@ -233,7 +238,8 @@ JSON 格式如下：
   "tool_action": "list_files / read_file / write_file / read_then_write / chat",
   "tool_file_name": "源文件名，如果没有则为空字符串",
   "target_file_name": "目标文件名，如果没有则为空字符串",
-  "tool_content": "需要直接写入的内容，如果没有则为空字符串"
+  "tool_content": "需要直接写入的内容，如果没有则为空字符串",
+  "plan_reason": "简要说明为什么选择这个工具动作"
 }}
 
 判断规则：
@@ -254,6 +260,7 @@ JSON 格式如下：
     tool_file_name = plan.get("tool_file_name", "")
     target_file_name = plan.get("target_file_name", "")
     tool_content = plan.get("tool_content", "")
+    plan_reason = plan.get("plan_reason", "")
 
     allowed_actions = {
         "list_files",
@@ -265,11 +272,23 @@ JSON 格式如下：
 
     if tool_action not in allowed_actions:
         tool_action = "chat"
+        plan_reason = "无法识别为文件工具任务，因此转为普通对话。"
+
+    if not plan_reason:
+        reason_map = {
+            "list_files": "用户想查看 workspace 中有哪些文件，因此需要列出文件列表。",
+            "read_file": "用户想读取指定文件内容，因此需要调用读取文件工具。",
+            "write_file": "用户想写入文件，因此需要进入写入前确认流程。",
+            "read_then_write": "用户希望根据已有文件生成新文件，因此需要先读取源文件再生成目标文件内容。",
+            "chat": "用户输入更适合普通对话，因此不需要调用文件工具。"
+        }
+        plan_reason = reason_map.get(tool_action, "已根据用户任务选择基础工具动作。")
 
     state["tool_action"] = tool_action
     state["tool_file_name"] = tool_file_name
     state["target_file_name"] = target_file_name
     state["tool_content"] = tool_content
+    state["plan_reason"] = plan_reason
 
     return state
 
@@ -309,10 +328,10 @@ def generate_content_from_file(source_file_name: str, source_content: str, targe
     return response.content
 
 
-def tool_node(state: AgentState) -> AgentState:
+def tool_executor_agent_node(state: AgentState) -> AgentState:
     """
-    工具执行节点：
-    根据 planning_node 的规划结果执行工具。
+    Tool Executor Agent：
+    根据 Planner Agent 的规划结果执行本地工具。
     """
     action = state["tool_action"]
     file_name = state["tool_file_name"]
@@ -390,6 +409,10 @@ def tool_node(state: AgentState) -> AgentState:
             f"当前尚未真正写入文件，等待用户确认。"
         )
 
+    elif action == "chat":
+        state["tool_result"] = "未调用工具。"
+        state = apply_error_state(state, state["tool_result"])
+
     else:
         state["tool_result"] = "未调用工具。"
         state = apply_error_state(state, state["tool_result"])
@@ -397,10 +420,46 @@ def tool_node(state: AgentState) -> AgentState:
     return state
 
 
-def answer_node(state: AgentState) -> AgentState:
+def reviewer_agent_node(state: AgentState) -> AgentState:
     """
-    最终回答节点：
-    根据工具执行结果生成用户可读回答。
+    Reviewer Agent：
+    使用规则检查工具执行结果、错误状态和写入确认状态。
+    """
+    tool_action = state["tool_action"]
+    error_type = state["error_type"]
+    need_confirmation = state["need_confirmation"]
+    pending_file_name = state["pending_file_name"]
+    pending_content = state["pending_content"]
+
+    if error_type != "none":
+        state["review_passed"] = False
+        state["review_result"] = "工具执行失败，已记录错误原因和恢复建议。"
+        return state
+
+    if need_confirmation and pending_file_name and pending_content:
+        state["review_passed"] = True
+        state["review_result"] = "检测到写文件操作，已进入用户确认流程，暂未实际写入文件。"
+        return state
+
+    if tool_action in ["list_files", "read_file", "chat"] and error_type == "none":
+        state["review_passed"] = True
+        state["review_result"] = "工具执行成功，结果可用于最终回复。"
+        return state
+
+    if tool_action == "write_file_confirmed":
+        state["review_passed"] = True
+        state["review_result"] = "用户已确认写入，文件写入流程完成。"
+        return state
+
+    state["review_passed"] = True
+    state["review_result"] = "已完成基础审查。"
+    return state
+
+
+def final_answer_node(state: AgentState) -> AgentState:
+    """
+    Final Answer Agent：
+    根据规划、工具执行和审查结果生成用户可读回答。
     """
     user_input = state["user_input"]
     tool_result = state["tool_result"]
@@ -409,23 +468,26 @@ def answer_node(state: AgentState) -> AgentState:
     error_type = state["error_type"]
     error_message = state["error_message"]
     recovery_suggestion = state["recovery_suggestion"]
+    review_result = state["review_result"]
 
     if error_type != "none":
         state["final_answer"] = (
             "工具执行失败。\n\n"
             f"错误类型：{error_type}\n\n"
             f"错误原因：\n{error_message}\n\n"
-            f"恢复建议：\n{recovery_suggestion}"
+            f"恢复建议：\n{recovery_suggestion}\n\n"
+            f"Reviewer 审查结果：\n{review_result}"
         )
         save_state(state)
         return state
 
     if need_confirmation:
         state["final_answer"] = (
-            f"我已经根据你的任务完成了准备工作。\n\n"
+            f"我已经根据你的任务生成了待写入内容。\n\n"
             f"{tool_result}\n\n"
             f"待写入文件：{pending_file_name}\n\n"
-            f"注意：文件目前还没有真正写入。请在页面下方查看内容预览，确认无误后点击“确认写入文件”。"
+            f"注意：当前尚未真正写入文件。请在页面下方查看内容预览，确认无误后点击“确认写入文件”。\n\n"
+            f"Reviewer 审查结果：\n{review_result}"
         )
         save_state(state)
         return state
@@ -438,6 +500,9 @@ def answer_node(state: AgentState) -> AgentState:
 
 工具执行结果：
 {tool_result}
+
+Reviewer 审查结果：
+{review_result}
 
 请用中文给用户一个简洁、清晰的回答。
 如果工具返回的是文件内容，请可以适当总结。
@@ -455,18 +520,20 @@ def answer_node(state: AgentState) -> AgentState:
 
 def build_agent_graph():
     """
-    构建 LangGraph 单 Agent 工作流。
+    构建 LangGraph 最小多 Agent 工作流。
     """
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("planning", planning_node)
-    workflow.add_node("tool", tool_node)
-    workflow.add_node("answer", answer_node)
+    workflow.add_node("planner_agent", planner_agent_node)
+    workflow.add_node("tool_executor_agent", tool_executor_agent_node)
+    workflow.add_node("reviewer_agent", reviewer_agent_node)
+    workflow.add_node("final_answer_agent", final_answer_node)
 
-    workflow.set_entry_point("planning")
-    workflow.add_edge("planning", "tool")
-    workflow.add_edge("tool", "answer")
-    workflow.add_edge("answer", END)
+    workflow.set_entry_point("planner_agent")
+    workflow.add_edge("planner_agent", "tool_executor_agent")
+    workflow.add_edge("tool_executor_agent", "reviewer_agent")
+    workflow.add_edge("reviewer_agent", "final_answer_agent")
+    workflow.add_edge("final_answer_agent", END)
 
     return workflow.compile()
 
@@ -484,10 +551,13 @@ def run_agent(user_input: str) -> AgentState:
         "tool_file_name": "",
         "target_file_name": "",
         "tool_content": "",
+        "plan_reason": "",
         "tool_result": "",
         "error_type": "none",
         "error_message": "",
         "recovery_suggestion": "",
+        "review_passed": False,
+        "review_result": "",
         "final_answer": "",
         "need_confirmation": False,
         "pending_file_name": "",
@@ -512,10 +582,13 @@ def confirm_write_file(file_name: str, content: str) -> str:
         "tool_file_name": file_name,
         "target_file_name": file_name,
         "tool_content": content,
+        "plan_reason": "用户已确认写入文件。",
         "tool_result": result,
         "error_type": error_type,
         "error_message": error_message,
         "recovery_suggestion": recovery_suggestion,
+        "review_passed": True,
+        "review_result": "用户已确认写入，文件写入流程完成。",
         "final_answer": f"文件已确认并写入：{file_name}" if error_type == "none" else "文件写入失败。",
         "need_confirmation": False,
         "pending_file_name": "",
