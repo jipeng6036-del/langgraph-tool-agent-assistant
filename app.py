@@ -1,6 +1,12 @@
 import streamlit as st
 
-from agent import run_agent, confirm_write_file, load_state
+from agent import (
+    clear_state,
+    confirm_write_file,
+    get_pending_task,
+    load_state,
+    run_agent,
+)
 
 
 st.set_page_config(
@@ -9,11 +15,11 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手 1.2")
+st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手 1.3")
 
 st.write(
     "这是一个用于学习 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和评测的实验项目。"
-    "当前 1.2 版本增强了文件不存在、非法路径、不支持格式等工具失败处理能力。"
+    "当前 1.3 版本新增了状态恢复与任务继续能力。"
 )
 
 st.sidebar.title("📌 项目目标")
@@ -41,6 +47,36 @@ st.sidebar.markdown(
 
 st.sidebar.title("📂 工作目录")
 st.sidebar.code("workspace/")
+
+pending_task = get_pending_task()
+
+if pending_task and "pending_file_name" not in st.session_state:
+    st.warning("检测到上一次有未完成的写入确认任务。")
+    st.write(f"待写入文件：{pending_task['pending_file_name']}")
+
+    with st.expander("查看待写入内容"):
+        st.text_area(
+            "待写入内容：",
+            pending_task["pending_content"],
+            height=200,
+            disabled=True,
+            key="pending_task_preview"
+        )
+
+    restore_col, clear_col = st.columns(2)
+
+    with restore_col:
+        if st.button("恢复未完成任务"):
+            st.session_state["pending_file_name"] = pending_task["pending_file_name"]
+            st.session_state["pending_content"] = pending_task["pending_content"]
+            st.success("已恢复未完成任务，请在下方确认是否写入。")
+            st.rerun()
+
+    with clear_col:
+        if st.button("清空未完成任务"):
+            clear_state()
+            st.success("已清空上一次未完成任务。")
+            st.rerun()
 
 st.subheader("💬 输入任务")
 
@@ -113,5 +149,10 @@ saved_state = load_state()
 
 if saved_state:
     st.json(saved_state)
+
+    if st.button("清空状态记录"):
+        clear_state()
+        st.success("状态记录已清空。")
+        st.rerun()
 else:
     st.info("暂无状态记录。")

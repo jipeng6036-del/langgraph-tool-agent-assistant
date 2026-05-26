@@ -72,6 +72,34 @@ def load_state() -> Optional[dict]:
         return json.load(f)
 
 
+def clear_state() -> None:
+    """
+    删除最近一次保存的 Agent 状态记录。
+    """
+    if os.path.exists(MEMORY_FILE):
+        os.remove(MEMORY_FILE)
+
+
+def get_pending_task() -> Optional[dict]:
+    """
+    读取上一次保存的状态，返回仍在等待确认的写入任务。
+    """
+    saved_state = load_state()
+    if not saved_state:
+        return None
+
+    state = saved_state.get("state", {})
+
+    if (
+        state.get("need_confirmation") is True
+        and state.get("pending_file_name")
+        and state.get("pending_content")
+    ):
+        return state
+
+    return None
+
+
 def get_llm():
     """
     获取大模型客户端。
