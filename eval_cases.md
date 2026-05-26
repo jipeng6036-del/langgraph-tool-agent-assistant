@@ -373,3 +373,22 @@
 ```
 
 如果 15 个测试用例中 12 个以上通过，则认为 Tool Agent 1.4 手动评测集初版可用。
+---
+
+## 十一、初始评测记录
+
+本次为 Tool Agent 1.4 初版手动评测，主要验证核心功能路径是否稳定。
+
+| 编号 | 测试类型 | 用户输入 / 操作 | 实际结果 | 是否通过 | 备注 |
+|---|---|---|---|---|---|
+| Case 002 | 正常任务 | 读取 notes.md | Agent 成功调用 read_file，读取 notes.md 内容并生成回答；error_type = none，need_confirmation = false | 通过 | 读取文件功能正常 |
+| Case 004 | 写入确认 | 请根据 notes.md 的内容生成 summary.md | Agent 成功进入 read_then_write 流程，生成 summary.md 待写入内容；need_confirmation = true，页面出现待确认写入操作 | 通过 | 写入前确认流程正常 |
+| Case 005 | 写入确认 | 点击“确认写入文件” | summary.md 成功写入，状态更新为 write_file_confirmed；need_confirmation = false，pending_file_name 和 pending_content 清空 | 通过 | 用户确认后写入正常 |
+| Case 006 | 失败处理 | 读取 not_exist.md | Agent 正确识别文件不存在；error_type = file_not_found，并展示 workspace 可用文件建议 | 通过 | 文件不存在处理正常 |
+| Case 008 | 失败处理 | 请根据 not_exist.md 的内容生成 summary.md | Agent 正确识别源文件不存在；error_type = file_not_found，need_confirmation = false，未进入写入确认流程 | 通过 | read_then_write 源文件失败时能停止流程 |
+
+### 本轮评测结论
+
+```text
+本轮手动测试覆盖了文件读取、读取后生成文件、写入确认、文件不存在处理和源文件失败中止流程。
+核心功能表现正常，Tool Agent 1.4 手动评测集初版可用。

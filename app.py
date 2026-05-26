@@ -13,14 +13,15 @@ st.set_page_config(
     page_title="Tool Agent Assistant",
     page_icon="🛠️",
     layout="wide"
-)
+ )
 
-st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手 1.3")
+st.title("🛠️ 基于 LangGraph 的工具调用型 Agent 助手 1.4")
 
 st.write(
     "这是一个用于学习 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和评测的实验项目。"
-    "当前 1.3 版本新增了状态恢复与任务继续能力。"
-)
+    "当前 1.4 版本新增了手动评测集 eval_cases.md，用于记录测试问题、预期工具动作、预期错误类型、预期确认状态和实际测试结果。"
+ )
+
 
 st.sidebar.title("📌 项目目标")
 st.sidebar.markdown(
@@ -42,6 +43,14 @@ st.sidebar.markdown(
     - list_files：查看 workspace 文件
     - read_file：读取 txt / md 文件
     - write_file：写入 txt / md 文件，需要用户确认
+    """
+)
+st.sidebar.title("🧪 评测集")
+st.sidebar.markdown(
+    """
+    - eval_cases.md：手动评测集
+    - 覆盖正常任务、写入确认、失败处理、状态恢复和边界测试
+    - 用于记录预期工具动作、错误类型、确认状态和实际测试结果
     """
 )
 
