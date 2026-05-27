@@ -2,11 +2,14 @@ import streamlit as st
 
 from agent import (
     clear_state,
+    clear_history,
     confirm_write_file,
     get_pending_task,
+    load_history,
     load_state,
     run_agent,
 )
+from tools import save_uploaded_file_to_workspace
 
 
 st.set_page_config(
@@ -15,12 +18,11 @@ st.set_page_config(
     layout="wide"
  )
 
-st.title("🛠️ 基于 LangGraph 的多 Agent 工具调用助手 2.0")
+st.title("🛠️ 基于 LangGraph 的文档工作流多 Agent 助手 3.0")
 
 st.write(
     "这是一个用于学习 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和评测的实验项目。"
-    "Tool Agent 2.0 引入 Planner Agent、Tool Executor Agent、Reviewer Agent 和 Final Answer Agent，"
-    "实现最小多 Agent 协作流程。"
+    "Tool Agent 3.0 支持文件上传、PDF/DOCX/TXT/MD 读取、摘要模板、多 Agent 工作流、历史任务和自动化评测。"
  )
 
 
@@ -42,10 +44,24 @@ st.sidebar.title("🧩 当前工具")
 st.sidebar.markdown(
     """
     - list_files：查看 workspace 文件
-    - read_file：读取 txt / md 文件
+    - read_file：读取 txt / md / pdf / docx 文件
     - write_file：写入 txt / md 文件，需要用户确认
+    - summarize_file：按模板生成摘要
+    - file_detail：查看文件详情
     """
 )
+
+st.sidebar.title("📄 文档能力")
+st.sidebar.markdown(
+    """
+    - 上传文件到 workspace
+    - 读取 txt / md / pdf / docx
+    - 自动摘要模板
+    - 历史任务记录
+    - 自动化评测脚本
+    """
+)
+
 st.sidebar.title("🧪 评测集")
 st.sidebar.markdown(
     """
@@ -98,6 +114,49 @@ if pending_task and "pending_file_name" not in st.session_state:
             st.success("已清空上一次未完成任务。")
             st.rerun()
 
+st.subheader("📤 上传文档")
+
+uploaded_file = st.file_uploader(
+    "上传 .txt / .md / .pdf / .docx 文件到 workspace：",
+    type=["txt", "md", "pdf", "docx"]
+)
+
+if uploaded_file is not None:
+    upload_result = save_uploaded_file_to_workspace(
+        uploaded_file.name,
+        uploaded_file.getvalue()
+    )
+
+    if "已上传" in upload_result:
+        st.success(upload_result)
+        st.write(f"文件名：{uploaded_file.name}")
+        st.write(f"文件大小：{uploaded_file.size} 字节")
+        st.info(f"你可以在任务输入中使用文件名：{uploaded_file.name}")
+    else:
+        st.error(upload_result)
+
+st.subheader("🧾 摘要模板")
+
+summary_template = st.selectbox(
+    "选择摘要模板：",
+    options=[
+        "general",
+        "meeting",
+        "paper",
+        "contract",
+        "resume",
+        "project_readme"
+    ],
+    format_func=lambda value: {
+        "general": "general：通用摘要",
+        "meeting": "meeting：会议纪要",
+        "paper": "paper：论文摘要",
+        "contract": "contract：合同摘要",
+        "resume": "resume：简历分析",
+        "project_readme": "project_readme：项目 README 摘要"
+    }[value]
+)
+
 st.subheader("💬 输入任务")
 
 user_input = st.text_area(
@@ -108,8 +167,12 @@ user_input = st.text_area(
 
 if st.button("运行 Agent"):
     if user_input.strip():
+        agent_input = user_input
+        if summary_template != "general":
+            agent_input = f"使用 {summary_template} 模板。用户任务：{user_input}"
+
         with st.spinner("Agent 正在规划并调用工具..."):
-            result = run_agent(user_input)
+            result = run_agent(agent_input)
 
         st.subheader("🤖 Agent 回答")
         st.write(result["final_answer"])
@@ -121,6 +184,9 @@ if st.button("运行 Agent"):
             "tool_file_name": result["tool_file_name"],
             "target_file_name": result["target_file_name"],
             "plan_reason": result["plan_reason"],
+            "summary_template": result["summary_template"],
+            "generated_file_name": result["generated_file_name"],
+            "history_id": result["history_id"],
             "need_confirmation": result["need_confirmation"],
             "pending_file_name": result["pending_file_name"],
             "error_type": result["error_type"],
@@ -179,3 +245,30 @@ if saved_state:
         st.rerun()
 else:
     st.info("暂无状态记录。")
+
+st.subheader("📚 历史任务列表")
+
+history_records = load_history(limit=20)
+
+if history_records:
+    st.dataframe(
+        [
+            {
+                "时间": record.get("saved_at", ""),
+                "用户输入": record.get("user_input", ""),
+                "tool_action": record.get("tool_action", ""),
+                "error_type": record.get("error_type", ""),
+                "review_passed": record.get("review_passed", False),
+                "generated_file_name": record.get("generated_file_name", "")
+            }
+            for record in history_records
+        ],
+        use_container_width=True
+    )
+
+    if st.button("清空历史记录"):
+        clear_history()
+        st.success("历史任务记录已清空。")
+        st.rerun()
+else:
+    st.info("暂无历史任务记录。")

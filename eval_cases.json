@@ -1,0 +1,58 @@
+[
+  {
+    "id": "case_001",
+    "input": "查看 workspace 里有哪些文件",
+    "expected_tool_action": "list_files",
+    "expected_error_type": "none",
+    "expected_need_confirmation": false
+  },
+  {
+    "id": "case_002",
+    "input": "读取 notes.md",
+    "expected_tool_action": "read_file",
+    "expected_error_type": "none",
+    "expected_need_confirmation": false
+  },
+  {
+    "id": "case_003",
+    "input": "读取 not_exist.md",
+    "expected_tool_action": "read_file",
+    "expected_error_type": "file_not_found",
+    "expected_need_confirmation": false
+  },
+  {
+    "id": "case_004",
+    "input": "读取 ../README.md",
+    "expected_tool_action": "read_file",
+    "expected_error_type": "invalid_path",
+    "expected_need_confirmation": false
+  },
+  {
+    "id": "case_005",
+    "input": "请根据 notes.md 的内容生成 summary.md",
+    "expected_tool_action": "read_then_write",
+    "expected_error_type": "none",
+    "expected_need_confirmation": true
+  },
+  {
+    "id": "case_006",
+    "input": "总结 notes.md",
+    "expected_tool_action": "summarize_file",
+    "expected_error_type": "none",
+    "expected_need_confirmation": true
+  },
+  {
+    "id": "case_007",
+    "input": "查看 notes.md 的文件信息",
+    "expected_tool_action": "file_detail",
+    "expected_error_type": "none",
+    "expected_need_confirmation": false
+  },
+  {
+    "id": "case_008",
+    "input": "你好，你能做什么？",
+    "expected_tool_action": "chat",
+    "expected_error_type": "none",
+    "expected_need_confirmation": false
+  }
+]
