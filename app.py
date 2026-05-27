@@ -18,11 +18,11 @@ st.set_page_config(
     layout="wide"
  )
 
-st.title("🛠️ 基于 LangGraph 的文档工作流多 Agent 助手 3.0")
+st.title("🛠️ 基于 LangGraph 的文档工作流多 Agent 助手 3.2")
 
 st.write(
     "这是一个用于学习 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和评测的实验项目。"
-    "Tool Agent 3.0 支持文件上传、PDF/DOCX/TXT/MD 读取、摘要模板、多 Agent 工作流、历史任务和自动化评测。"
+    "Tool Agent 3.2 在 3.0 文档工作流基础上新增文件名智能匹配和写入后摘要预览下载能力。"
  )
 
 
@@ -57,6 +57,8 @@ st.sidebar.markdown(
     - 上传文件到 workspace
     - 读取 txt / md / pdf / docx
     - 自动摘要模板
+    - 文件名智能匹配
+    - 写入后摘要预览与下载
     - 历史任务记录
     - 自动化评测脚本
     """
@@ -222,15 +224,50 @@ if "pending_file_name" in st.session_state:
     )
 
     if st.button("确认写入文件"):
+        pending_file_name = st.session_state["pending_file_name"]
+        pending_content = st.session_state["pending_content"]
         write_result = confirm_write_file(
-            st.session_state["pending_file_name"],
-            st.session_state["pending_content"]
+            pending_file_name,
+            pending_content
         )
 
         st.success(write_result)
 
+        if "文件已写入" in write_result:
+            st.session_state["last_written_file"] = pending_file_name
+            st.session_state["last_written_content"] = pending_content
+            st.session_state["last_write_result"] = write_result
+
         del st.session_state["pending_file_name"]
         del st.session_state["pending_content"]
+        st.rerun()
+
+st.subheader("📄 最近生成内容预览")
+
+if "last_written_file" in st.session_state and "last_written_content" in st.session_state:
+    last_written_file = st.session_state["last_written_file"]
+    last_written_content = st.session_state["last_written_content"]
+
+    if "last_write_result" in st.session_state:
+        st.success(st.session_state["last_write_result"])
+
+    st.write(f"文件名：{last_written_file}")
+    st.markdown(last_written_content)
+    st.download_button(
+        label="下载生成文件",
+        data=last_written_content,
+        file_name=last_written_file,
+        mime="text/markdown"
+    )
+
+    if st.button("清空最近生成预览"):
+        del st.session_state["last_written_file"]
+        del st.session_state["last_written_content"]
+        if "last_write_result" in st.session_state:
+            del st.session_state["last_write_result"]
+        st.rerun()
+else:
+    st.info("暂无最近生成内容。")
 
 st.subheader("💾 最近一次状态保存")
 

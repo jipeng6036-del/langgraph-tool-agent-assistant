@@ -54,5 +54,26 @@
     "expected_tool_action": "chat",
     "expected_error_type": "none",
     "expected_need_confirmation": false
+  },
+  {
+    "id": "case_009",
+    "input": "总结 notes",
+    "expected_tool_action": "summarize_file",
+    "expected_error_type": "none",
+    "expected_need_confirmation": true
+  },
+  {
+    "id": "case_010",
+    "input": "查看 notes 文件信息",
+    "expected_tool_action": "file_detail",
+    "expected_error_type": "none",
+    "expected_need_confirmation": false
+  },
+  {
+    "id": "case_011",
+    "input": "读取 不存在的文件",
+    "expected_tool_action": "read_file",
+    "expected_error_type": "file_not_found",
+    "expected_need_confirmation": false
   }
 ]

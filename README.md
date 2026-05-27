@@ -10,7 +10,7 @@
 
 一个基于 LangGraph 的文档工作流多 Agent 助手项目，用于学习和实践 Agent Loop、Tool Calling、文档读取、摘要生成、用户确认、状态保存、历史任务和自动化评测等核心工程能力。
 
-本项目不以 RAG 检索为核心，而是重点关注 Agent 如何根据用户任务选择工具、执行工具、处理文档读取与摘要生成，并在涉及写入操作时进行用户确认；在 3.0 版本中，进一步升级为文档工作流多 Agent 助手，支持文件上传、PDF/DOCX/TXT/MD 读取、自动摘要模板、历史任务列表和自动化评测脚本。
+本项目不以 RAG 检索为核心，而是重点关注 Agent 如何根据用户任务选择工具、执行工具、处理文档读取与摘要生成，并在涉及写入操作时进行用户确认；在 3.2 版本中，进一步增强文档工作流体验，支持文件名智能匹配、写入后摘要预览和生成文件下载。
 
 ---
 
@@ -26,9 +26,11 @@ Tool Agent Assistant 是一个面向 Agent 工程学习的实验项目。
 - 上传文件到 `workspace`
 - 读取 `.txt` / `.md` / `.pdf` / `.docx` 文件
 - 根据摘要模板生成 Markdown 摘要
+- 根据关键词智能匹配 workspace 文件名
 - 根据已有文件生成新 Markdown 文件
 - 写文件前要求用户确认
 - 用户确认后才真正写入文件
+- 写入后在页面直接预览生成内容并下载
 - 保存最近一次 Agent 执行状态
 - 文件不存在时给出可用文件建议
 - 非法路径访问时进行安全拦截
@@ -58,7 +60,7 @@ Tool Agent Assistant 是一个面向 Agent 工程学习的实验项目。
 当前项目版本：
 
 ```text
-Tool Agent 3.0
+Tool Agent 3.2
 ```
 
 版本能力：
@@ -71,6 +73,8 @@ Tool Agent 1.3：状态恢复与任务继续，支持页面刷新后恢复上一
 Tool Agent 1.4：新增手动评测集 eval_cases.md，用于记录测试问题、预期工具动作、预期错误类型、预期确认状态和实际测试结果
 Tool Agent 2.0：最小多 Agent 工作流，将任务规划、工具执行、结果审查和最终回复拆分为 Planner Agent、Tool Executor Agent、Reviewer Agent 和 Final Answer Agent。
 Tool Agent 3.0：文档工作流多 Agent 助手，支持文件上传、PDF/DOCX/TXT/MD 读取、自动摘要模板、历史任务列表和自动化评测脚本。
+Tool Agent 3.1：文件名智能匹配，支持根据用户输入关键词自动匹配 workspace 中的文件。
+Tool Agent 3.2：写入后摘要预览与下载，用户确认写入后可直接在页面查看生成内容并下载。
 ```
 
 ---
@@ -357,6 +361,30 @@ project_readme：项目 README 摘要
 
 ---
 
+### 11. 文件名智能匹配与写入后预览
+
+Tool Agent 3.2 新增文件名智能匹配能力。用户不必总是输入完整文件名，可以输入关键词：
+
+```text
+总结简历
+总结合同
+总结 notes
+```
+
+系统会尝试在 `workspace` 中自动匹配文件，例如：
+
+```text
+“总结简历” → 李鹏_简历.pdf
+“总结合同” → 案例_入职填写劳动合同(1).pdf
+```
+
+如果匹配到多个候选文件，系统会列出候选列表，并要求用户输入更明确的文件名。
+
+用户点击“确认写入文件”后，页面会显示“最近生成内容预览”，可以直接查看生成的 Markdown 摘要内容，并通过“下载生成文件”按钮下载 `.md` 文件。
+
+
+---
+
 ## 五、技术栈
 
 - Python
@@ -456,6 +484,7 @@ file_not_found
 invalid_path
 unsupported_format
 empty_file_name
+multiple_matches
 ```
 
 ### Reviewer Agent
@@ -508,14 +537,15 @@ tools.py
 功能：
 
 ```text
-读取 workspace 目录下的 .txt / .md 文件
+读取 workspace 目录下的 .txt / .md / .pdf / .docx 文件
+支持根据关键词智能匹配文件名
 ```
 
 限制：
 
 ```text
 只能读取 workspace 目录内的文件
-只支持 .txt 和 .md 文件
+只支持 .txt、.md、.pdf 和 .docx 文件
 ```
 
 失败处理：
@@ -523,7 +553,8 @@ tools.py
 ```text
 文件不存在时展示 workspace 中可用文件
 非法路径时拒绝访问
-不支持格式时提示仅支持 .txt 和 .md
+多候选匹配时提示候选文件列表
+不支持格式时提示仅支持 .txt、.md、.pdf 和 .docx
 ```
 
 ### write_file_tool
@@ -637,6 +668,7 @@ file_not_found
 invalid_path
 unsupported_format
 empty_file_name
+multiple_matches
 ```
 
 ### error_message
@@ -959,6 +991,15 @@ history.jsonl 是否记录任务
 run_eval.py 是否能生成 eval_results.md
 ```
 
+Tool Agent 3.2 评测时，还可以额外关注：
+
+```text
+输入关键词能否自动匹配文件名
+多候选文件时是否提示候选列表
+确认写入后是否直接显示摘要预览
+是否可以下载生成的 summary.md
+```
+
 ---
 
 ## 十六、当前已实现能力
@@ -999,6 +1040,10 @@ run_eval.py 是否能生成 eval_results.md
 ✅ 文件上传到 workspace
 ✅ 读取 txt / md / pdf / docx
 ✅ 自动摘要模板
+✅ 文件名智能匹配
+✅ 多候选文件提示
+✅ 写入后摘要预览
+✅ 下载生成文件
 ✅ 历史任务列表
 ✅ 自动化评测脚本
 ```
@@ -1066,15 +1111,26 @@ PDF / DOCX / TXT / MD 读取
 自动化评测脚本
 ```
 
-### Tool Agent 3.1：文档工作流增强
+### Tool Agent 3.1：文件名智能匹配【已完成】
 
-计划增加：
+已实现：
 
 ```text
-更丰富的文档类型
-批量摘要
-摘要质量评分
-历史记录筛选
+根据用户输入关键词匹配 workspace 文件
+支持“总结 notes”“总结简历”“总结合同”等自然语言输入
+多候选文件时提示候选列表
+保持非法路径访问拦截
+```
+
+### Tool Agent 3.2：写入后摘要预览与下载【已完成】
+
+已实现：
+
+```text
+确认写入文件后在页面展示最近生成内容预览
+提供“下载生成文件”按钮
+支持清空最近生成预览
+继续保留写入前用户确认流程
 ```
 ---
 
@@ -1104,5 +1160,5 @@ PDF / DOCX / TXT / MD 读取
 ## 十九、简历描述参考
 
 ```text
-基于 LangGraph 构建文档工作流多 Agent 助手，将任务规划、工具执行、结果审查和最终回复拆分为 Planner Agent、Tool Executor Agent、Reviewer Agent 和 Final Answer Agent。系统支持上传文件到 workspace，读取 PDF/DOCX/TXT/MD 文档，按通用摘要、会议纪要、论文摘要、合同摘要、简历分析和项目 README 等模板生成 Markdown 摘要，并实现写入前用户确认、状态保存与恢复、历史任务记录和自动化评测。
+基于 LangGraph 构建文档工作流多 Agent 助手，将任务规划、工具执行、结果审查和最终回复拆分为 Planner Agent、Tool Executor Agent、Reviewer Agent 和 Final Answer Agent。系统支持上传文件到 workspace，读取 PDF/DOCX/TXT/MD 文档，根据关键词智能匹配文件名，按通用摘要、会议纪要、论文摘要、合同摘要、简历分析和项目 README 等模板生成 Markdown 摘要，并实现写入前用户确认、写入后摘要预览下载、状态保存与恢复、历史任务记录和自动化评测。
 ```

@@ -9,7 +9,13 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
-from tools import get_file_detail, list_files_tool, read_file_tool, write_file_tool
+from tools import (
+    get_file_detail,
+    list_files_tool,
+    read_file_tool,
+    resolve_workspace_file_name,
+    write_file_tool,
+)
 
 
 load_dotenv()
@@ -219,6 +225,13 @@ def detect_tool_error(tool_result: str) -> tuple[str, str, str]:
             "请检查文件名是否正确，或先使用“查看 workspace 里有哪些文件”。"
         )
 
+    if "匹配到多个候选文件" in tool_result:
+        return (
+            "multiple_matches",
+            tool_result,
+            "请从候选文件中选择一个更明确的文件名。"
+        )
+
     if "非法文件路径" in tool_result:
         return (
             "invalid_path",
@@ -275,6 +288,64 @@ def apply_error_state(state: AgentState, tool_result: str) -> AgentState:
     return state
 
 
+def build_resolution_recovery_suggestion(error_type: str) -> str:
+    """
+    为文件名智能匹配失败生成恢复建议。
+    """
+    if error_type == "multiple_matches":
+        return "请从候选文件中选择一个更明确的文件名。"
+
+    if error_type == "invalid_path":
+        return "出于安全限制，Agent 只能访问 workspace 目录内的文件，请使用 workspace 内的相对文件名。"
+
+    if error_type == "unsupported_format":
+        return "请使用 .txt、.md、.pdf 或 .docx 文件进行测试。"
+
+    if error_type == "empty_file_name":
+        return "请输入明确的文件名，例如 notes.md、简历 或 合同。"
+
+    return "请检查文件名或关键词是否正确，或先使用“查看 workspace 里有哪些文件”。"
+
+
+def apply_resolution_error_state(state: AgentState, resolution: dict) -> AgentState:
+    """
+    将文件名解析失败写入 AgentState。
+    """
+    error_type = resolution.get("error_type", "file_not_found")
+    message = resolution.get("message", "文件不存在。")
+
+    state["tool_result"] = message
+    state["error_type"] = error_type
+    state["error_message"] = message
+    state["recovery_suggestion"] = build_resolution_recovery_suggestion(error_type)
+    state["need_confirmation"] = False
+    state["pending_file_name"] = ""
+    state["pending_content"] = ""
+    state["generated_file_name"] = ""
+
+    return state
+
+
+def resolve_state_file_name(state: AgentState, file_name: str) -> tuple[Optional[str], str]:
+    """
+    在工具执行前把关键词解析成真实 workspace 文件名，并同步到 state。
+    """
+    resolution = resolve_workspace_file_name(file_name)
+
+    if not resolution["ok"]:
+        apply_resolution_error_state(state, resolution)
+        return None, ""
+
+    resolved_file_name = resolution["file_name"]
+    match_note = ""
+
+    if resolved_file_name != file_name:
+        state["tool_file_name"] = resolved_file_name
+        match_note = f"已根据用户输入自动匹配到 workspace 文件：{resolved_file_name}\n"
+
+    return resolved_file_name, match_note
+
+
 def planner_agent_node(state: AgentState) -> AgentState:
     """
     Planner Agent：
@@ -291,7 +362,7 @@ def planner_agent_node(state: AgentState) -> AgentState:
 用于查看 workspace 目录有哪些文件。
 
 2. read_file
-用于读取 workspace 目录下的 txt / md 文件。
+用于读取 workspace 目录下的 txt / md / pdf / docx 文件。
 
 3. write_file
 用于直接写入 txt / md 文件。写入前必须用户确认。
@@ -329,7 +400,7 @@ def planner_agent_node(state: AgentState) -> AgentState:
 
 JSON 格式如下：
 {{
-  "tool_action": "list_files / read_file / write_file / read_then_write / chat",
+  "tool_action": "list_files / read_file / write_file / read_then_write / summarize_file / file_detail / chat",
   "tool_file_name": "源文件名，如果没有则为空字符串",
   "target_file_name": "目标文件名，如果没有则为空字符串",
   "tool_content": "需要直接写入的内容，如果没有则为空字符串",
@@ -467,7 +538,91 @@ def infer_plan_from_user_input(user_input: str) -> Optional[dict]:
             "plan_reason": "用户想读取指定文件内容，因此需要调用读取文件工具。"
         }
 
+    if any(keyword in user_input for keyword in ["文件信息", "文件详情", "文件大小", "修改时间"]):
+        query = extract_file_query_from_user_input(user_input)
+        if query:
+            return {
+                "tool_action": "file_detail",
+                "tool_file_name": query,
+                "target_file_name": "",
+                "tool_content": "",
+                "summary_template": summary_template,
+                "plan_reason": "用户想查看文件详情，因此需要调用文件详情工具。"
+            }
+
+    if any(keyword in user_input for keyword in ["总结", "摘要", "概括", "提炼"]):
+        query = extract_file_query_from_user_input(user_input)
+        if query:
+            return {
+                "tool_action": "summarize_file",
+                "tool_file_name": query,
+                "target_file_name": "",
+                "tool_content": "",
+                "summary_template": summary_template,
+                "plan_reason": "用户想对文档进行摘要，因此需要读取文件并按模板生成摘要。"
+            }
+
+    if any(keyword in user_input for keyword in ["读取", "查看", "打开"]):
+        query = extract_file_query_from_user_input(user_input)
+        if query:
+            return {
+                "tool_action": "read_file",
+                "tool_file_name": query,
+                "target_file_name": "",
+                "tool_content": "",
+                "summary_template": summary_template,
+                "plan_reason": "用户想读取指定文件内容，因此需要调用读取文件工具。"
+            }
+
     return None
+
+
+def extract_file_query_from_user_input(user_input: str) -> str:
+    """
+    从没有完整扩展名的自然语言任务中提取文件关键词。
+    """
+    cleaned = re.sub(
+        r"使用\s*(general|meeting|paper|contract|resume|project_readme)\s*模板。?用户任务[:：]?",
+        "",
+        user_input,
+        flags=re.IGNORECASE
+    )
+    stop_words = [
+        "会议纪要模板",
+        "论文摘要模板",
+        "合同摘要模板",
+        "简历分析模板",
+        "通用摘要模板",
+        "项目 README 摘要模板",
+        "项目README摘要模板",
+        "文件信息",
+        "文件详情",
+        "文件大小",
+        "修改时间",
+        "总结",
+        "摘要",
+        "概括",
+        "提炼",
+        "读取",
+        "查看",
+        "打开",
+        "文件",
+        "内容",
+        "信息",
+        "请",
+        "帮我",
+        "一下",
+        "用",
+        "的",
+    ]
+
+    for word in stop_words:
+        cleaned = cleaned.replace(word, "")
+
+    cleaned = re.sub(r"[：:，,。.!！?？；;（）()【】\[\]\"'“”]", " ", cleaned)
+    cleaned = " ".join(cleaned.split())
+
+    return cleaned.strip()
 
 
 def detect_summary_template(user_input: str) -> str:
@@ -607,11 +762,19 @@ def tool_executor_agent_node(state: AgentState) -> AgentState:
         state = apply_error_state(state, state["tool_result"])
 
     elif action == "read_file":
-        state["tool_result"] = read_file_tool(file_name)
+        resolved_file_name, match_note = resolve_state_file_name(state, file_name)
+        if not resolved_file_name:
+            return state
+
+        state["tool_result"] = f"{match_note}{read_file_tool(resolved_file_name)}"
         state = apply_error_state(state, state["tool_result"])
 
     elif action == "file_detail":
-        state["tool_result"] = get_file_detail(file_name)
+        resolved_file_name, match_note = resolve_state_file_name(state, file_name)
+        if not resolved_file_name:
+            return state
+
+        state["tool_result"] = f"{match_note}{get_file_detail(resolved_file_name)}"
         state = apply_error_state(state, state["tool_result"])
 
     elif action == "write_file":
@@ -640,6 +803,11 @@ def tool_executor_agent_node(state: AgentState) -> AgentState:
         if not target_file_name:
             target_file_name = "summary.md"
 
+        resolved_file_name, match_note = resolve_state_file_name(state, file_name)
+        if not resolved_file_name:
+            return state
+
+        file_name = resolved_file_name
         source_content = read_file_tool(file_name)
 
         error_type, error_message, recovery_suggestion = detect_tool_error(source_content)
@@ -665,7 +833,7 @@ def tool_executor_agent_node(state: AgentState) -> AgentState:
         state["generated_file_name"] = target_file_name
         state["pending_content"] = generated_content
         state["tool_result"] = (
-            f"已读取源文件：{file_name}\n"
+            f"{match_note}已读取源文件：{file_name}\n"
             f"已生成目标文件内容：{target_file_name}\n"
             f"当前尚未真正写入文件，等待用户确认。"
         )
@@ -676,6 +844,11 @@ def tool_executor_agent_node(state: AgentState) -> AgentState:
             state = apply_error_state(state, state["tool_result"])
             return state
 
+        resolved_file_name, match_note = resolve_state_file_name(state, file_name)
+        if not resolved_file_name:
+            return state
+
+        file_name = resolved_file_name
         source_content = read_file_tool(file_name)
         error_type, error_message, recovery_suggestion = detect_tool_error(source_content)
 
@@ -703,7 +876,7 @@ def tool_executor_agent_node(state: AgentState) -> AgentState:
         state["generated_file_name"] = generated_file_name
         state["target_file_name"] = generated_file_name
         state["tool_result"] = (
-            f"已读取源文件：{file_name}\n"
+            f"{match_note}已读取源文件：{file_name}\n"
             f"已使用摘要模板：{summary_template}\n"
             f"已生成摘要文件内容：{generated_file_name}\n"
             f"当前尚未真正写入文件，等待用户确认。"
@@ -738,6 +911,8 @@ def reviewer_agent_node(state: AgentState) -> AgentState:
             state["review_result"] = "文档可能无法提取文本，无法生成可靠摘要。"
         elif error_type == "unsupported_format":
             state["review_result"] = "文件格式不支持，未继续执行文档工作流。"
+        elif error_type == "multiple_matches":
+            state["review_result"] = "匹配到多个候选文件，需要用户明确选择具体文件。"
         else:
             state["review_result"] = "工具执行失败，已记录错误原因和恢复建议。"
         return state
@@ -747,19 +922,31 @@ def reviewer_agent_node(state: AgentState) -> AgentState:
         state["review_result"] = "文档可能无法提取文本，无法生成可靠摘要。"
         return state
 
+    match_note = ""
+    for line in tool_result.splitlines():
+        if line.startswith("已根据用户输入自动匹配到 workspace 文件："):
+            match_note = line
+            break
+
     if tool_action == "summarize_file" and need_confirmation and pending_file_name and pending_content:
         state["review_passed"] = True
         state["review_result"] = "摘要内容已生成，已进入用户确认流程，暂未实际写入文件。"
+        if match_note:
+            state["review_result"] = f"{match_note}。{state['review_result']}"
         return state
 
     if need_confirmation and pending_file_name and pending_content:
         state["review_passed"] = True
         state["review_result"] = "检测到写文件操作，已进入用户确认流程，暂未实际写入文件。"
+        if match_note:
+            state["review_result"] = f"{match_note}。{state['review_result']}"
         return state
 
     if tool_action in ["list_files", "read_file", "file_detail", "chat"] and error_type == "none":
         state["review_passed"] = True
         state["review_result"] = "工具执行成功，结果可用于最终回复。"
+        if match_note:
+            state["review_result"] = f"{match_note}。{state['review_result']}"
         return state
 
     if tool_action == "write_file_confirmed":
@@ -787,6 +974,17 @@ def final_answer_node(state: AgentState) -> AgentState:
     review_result = state["review_result"]
 
     if error_type != "none":
+        if error_type == "multiple_matches":
+            state["final_answer"] = (
+                "匹配到多个候选文件。\n\n"
+                f"候选文件列表：\n{error_message}\n\n"
+                "请用户输入更明确的文件名，例如完整文件名。\n\n"
+                f"Reviewer 审查结果：\n{review_result}"
+            )
+            save_state(state)
+            append_history(state)
+            return state
+
         state["final_answer"] = (
             "工具执行失败。\n\n"
             f"错误类型：{error_type}\n\n"
