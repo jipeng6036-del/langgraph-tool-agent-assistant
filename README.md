@@ -1,5 +1,13 @@
 # Tool Agent Assistant
 
+<p align="center">
+  <img src="assets/images/agent2_home.png" width="900">
+</p>
+
+<p align="center">
+  <img src="assets/images/agent2_error.png" width="900">
+</p>
+
 一个基于 LangGraph 的工具调用型 Agent 助手项目，用于学习和实践 Agent Loop、Tool Calling、工具失败处理、用户确认、状态保存和后续评测等核心工程能力。
 
 本项目不以 RAG 检索为核心，而是重点关注 Agent 如何根据用户任务选择工具、执行工具、处理文件读写，并在涉及写入操作时进行用户确认；在 2.0 版本中，进一步引入最小多 Agent 工作流，将任务规划、工具执行、结果审查和最终回复拆分为多个角色节点协作完成。
