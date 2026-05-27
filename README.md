@@ -1,11 +1,23 @@
 # Tool Agent Assistant
 
-<p align="center">
-  <img src="assets/images/agent2_home.png" width="900">
-</p>
+## 页面预览
+
+### 1. 文档摘要生成与预览
 
 <p align="center">
-  <img src="assets/images/agent2_error.png" width="900">
+  <img src="assets/images/picture1.png" width="900">
+</p>
+
+### 2. 文件上传与智能匹配
+
+<p align="center">
+  <img src="assets/images/picture2.png" width="900">
+</p>
+
+### 3. 合同摘要与历史任务记录
+
+<p align="center">
+  <img src="assets/images/picture3.png" width="900">
 </p>
 
 一个基于 LangGraph 的文档工作流多 Agent 助手项目，用于学习和实践 Agent Loop、Tool Calling、文档读取、摘要生成、用户确认、状态保存、历史任务和自动化评测等核心工程能力。
